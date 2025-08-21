@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 from pathlib import Path
 
 PROC_DIR = Path("data/processed")
@@ -12,17 +11,32 @@ st.set_page_config(page_title="ROAS Forecasting & Budget Allocation", layout="wi
 def load_data():
     df = pd.read_csv(RAW_DIR / "ua_data.csv", parse_dates=["date"])
     holdout = pd.read_csv(PROC_DIR / "holdout_predictions.csv", parse_dates=["date"])
-    bt = pd.read_csv(PROC_DIR / "backtest_metrics.csv", parse_dates=["train_end","test_start","test_end"])
+    bt = pd.read_csv(PROC_DIR / "backtest_metrics.csv", parse_dates=["train_end", "test_start", "test_end"])
     recs = pd.read_csv(PROC_DIR / "recommendations.csv", parse_dates=["date"])
     port_base = pd.read_csv(PROC_DIR / "portfolio_baseline.csv")
     port_after = pd.read_csv(PROC_DIR / "portfolio_after.csv")
     return df, holdout, bt, recs, port_base, port_after
 
+def ensure_artifacts():
+    """Generate missing data artifacts by running the training pipeline."""
+    try:
+        import main as training_pipeline
+    except Exception as e:
+        st.error(f"Could not import training pipeline: {e}")
+        st.stop()
+    try:
+        training_pipeline.main()  # writes CSVs into data/processed
+    except Exception as e:
+        st.error(f"Failed to generate artifacts by running training pipeline: {e}")
+        st.stop()
+
+# First try to load; if missing, generate and try again
 try:
     df, holdout, bt, recs, port_base, port_after = load_data()
 except Exception:
-    st.error("Run `python main.py` first to generate artifacts.")
-    st.stop()
+    with st.spinner("No artifacts found. Generating demo data and models (one-time)..."):
+        ensure_artifacts()
+    df, holdout, bt, recs, port_base, port_after = load_data()
 
 st.title("Mobile Game UA: ROAS Forecasting and Budget Allocation")
 
@@ -49,10 +63,10 @@ if channel_filter:
 if campaign_filter:
     plot_df = plot_df[plot_df["campaign_id"].isin(campaign_filter)]
 
-st.line_chart(plot_df.set_index("date")[["ROAS_d7","pred_d7","pred_d7_p05","pred_d7_p95"]])
+st.line_chart(plot_df.set_index("date")[["ROAS_d7", "pred_d7", "pred_d7_p05", "pred_d7_p95"]])
 
 st.subheader("Scale/Cut Recommendations")
-st.dataframe(recs.sort_values(["decision","pred_roas"], ascending=[True, False]))
+st.dataframe(recs.sort_values(["decision", "pred_roas"], ascending=[True, False]))
 
 st.subheader("Budget Reallocation Simulator")
 available_channels = sorted(df["channel"].unique().tolist())
@@ -66,9 +80,14 @@ if st.button("Simulate Reallocation"):
     from src.business import budget_reallocation
     portfolio = port_base.copy()
     realloc_map = {f"{src}->{dst}": amount}
-    after, new_roas = budget_reallocation(portfolio, realloc_map, min_spend_by_campaign=min_spend, max_shift_ratio=max_shift)
-    baseline_roas = (portfolio["current_spend"]*portfolio["pred_roas"]).sum() / portfolio["current_spend"].sum()
-    uplift = 100*(new_roas - baseline_roas)/baseline_roas
+    after, new_roas = budget_reallocation(
+        portfolio,
+        realloc_map,
+        min_spend_by_campaign=min_spend,
+        max_shift_ratio=max_shift
+    )
+    baseline_roas = (portfolio["current_spend"] * portfolio["pred_roas"]).sum() / portfolio["current_spend"].sum()
+    uplift = 100 * (new_roas - baseline_roas) / baseline_roas
     st.metric("Portfolio ROAS (baseline)", f"{baseline_roas:.3f}")
     st.metric("Portfolio ROAS (after)", f"{new_roas:.3f}")
     st.metric("Expected uplift", f"{uplift:.2f}%")
