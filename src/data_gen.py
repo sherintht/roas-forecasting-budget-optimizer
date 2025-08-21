@@ -1,0 +1,113 @@
+import numpy as np
+import pandas as pd
+from datetime import datetime, timedelta
+from .utils import ensure_dirs, save_df, RAW_DIR, set_seed, add_weekday_weekend, add_month_seasonality, add_holiday_flags, clip_nonnegative
+
+CHANNELS = ["Facebook", "Google", "TikTok", "UnityAds", "Applovin"]
+COUNTRIES = ["US", "GB", "DE", "JP", "BR"]
+PLATFORMS = ["iOS", "Android"]
+
+def generate_campaigns(n_campaigns=20, channels=CHANNELS):
+    campaigns = []
+    for i in range(n_campaigns):
+        channel = np.random.choice(channels)
+        country = np.random.choice(COUNTRIES, p=[0.35,0.15,0.15,0.2,0.15])
+        platform = np.random.choice(PLATFORMS, p=[0.45,0.55])
+        base_cpi = np.random.uniform(0.8, 4.0) * (1.15 if platform=="iOS" else 0.95)
+        quality = np.random.uniform(0.7, 1.3)  # impacts LTV
+        bid = np.random.uniform(0.7, 3.0)
+        target_cpi = base_cpi * np.random.uniform(0.9, 1.2)
+        campaigns.append({
+            "campaign_id": f"C{i+1:03d}",
+            "channel": channel,
+            "country": country,
+            "platform": platform,
+            "base_cpi": base_cpi,
+            "quality": quality,
+            "bid": bid,
+            "target_cpi": target_cpi
+        })
+    return pd.DataFrame(campaigns)
+
+def seasonality_factor(date):
+    # weekday/weekend
+    wd = date.weekday()
+    weekend_boost = 1.08 if wd in [5,6] else 1.0
+    # monthly seasonality (e.g., Nov-Dec higher, Jan lower)
+    m = date.month
+    month_mult = {
+        1:0.92,2:0.95,3:1.0,4:1.02,5:1.05,6:1.07,7:1.1,8:1.08,9:1.03,10:1.04,11:1.12,12:1.2
+    }.get(m,1.0)
+    return weekend_boost * month_mult
+
+def channel_spend_profile(channel):
+    # average daily spend level (relative)
+    return {
+        "Facebook": np.random.uniform(800, 2000),
+        "Google": np.random.uniform(700, 1800),
+        "TikTok": np.random.uniform(400, 1200),
+        "UnityAds": np.random.uniform(200, 800),
+        "Applovin": np.random.uniform(200, 700)
+    }[channel]
+
+def generate_timeseries(campaigns, start_date="2024-01-01", end_date="2025-07-31"):
+    dates = pd.date_range(start_date, end_date, freq="D")
+    rows = []
+    for _, c in campaigns.iterrows():
+        base_spend = channel_spend_profile(c["channel"]) * np.random.uniform(0.7, 1.3)
+        spend_vol = np.random.uniform(0.15, 0.35)
+        ltv_d1 = np.random.uniform(0.15, 0.45) * c["quality"]
+        ltv_d7 = ltv_d1 * np.random.uniform(1.8, 3.5)  # cumulative by D7
+        ltv_d30 = ltv_d7 * np.random.uniform(1.2, 2.0) # cumulative by D30
+        for d in dates:
+            seas = seasonality_factor(d)
+            # stochastic spend
+            spend = base_spend * seas * np.random.lognormal(mean=0, sigma=spend_vol)
+            # CPI fluctuates around base_cpi, impacted by platform/channel noise
+            cpi = c["base_cpi"] * np.random.lognormal(mean=0, sigma=0.25)
+            installs = spend / max(cpi, 0.2)
+            # Revenue signals with lagged noise (simulate D1/D7/D30 cumulative return fractions)
+            # Introduce diminishing returns at high spend (S-curve)
+            sat = 1 - np.exp(-spend/2500)
+            d1_revenue = installs * ltv_d1 * (0.9 + 0.2*np.random.rand()) * (0.85 + 0.3*sat)
+            d7_revenue = installs * ltv_d7 * (0.9 + 0.2*np.random.rand()) * (0.85 + 0.3*sat)
+            d30_revenue = installs * ltv_d30 * (0.9 + 0.2*np.random.rand()) * (0.85 + 0.3*sat)
+            rows.append({
+                "date": d,
+                "campaign_id": c["campaign_id"],
+                "channel": c["channel"],
+                "country": c["country"],
+                "platform": c["platform"],
+                "ad_spend": spend,
+                "clicks": installs * np.random.uniform(2.5, 5.0), # proxy CTR/CVR
+                "installs": installs,
+                "revenue_day1": d1_revenue,
+                "revenue_day7": d7_revenue,
+                "revenue_day30": d30_revenue,
+                "bid": c["bid"],
+                "target_cpi": c["target_cpi"]
+            })
+    df = pd.DataFrame(rows)
+    df = clip_nonnegative(df, ["ad_spend","clicks","installs","revenue_day1","revenue_day7","revenue_day30"])
+    return df
+
+def add_derived(df):
+    df["CAC"] = np.where(df["installs"]>0, df["ad_spend"]/df["installs"], np.nan)
+    for k, rev in {"d1":"revenue_day1", "d7":"revenue_day7", "d30":"revenue_day30"}.items():
+        df[f"ROAS_{k}"] = np.where(df["ad_spend"]>0, df[rev]/df["ad_spend"], 0)
+    return df
+
+def generate_and_save(n_campaigns=24, start_date="2024-01-01", end_date="2025-07-31", seed=42):
+    ensure_dirs()
+    set_seed(seed)
+    campaigns = generate_campaigns(n_campaigns=n_campaigns)
+    df = generate_timeseries(campaigns, start_date, end_date)
+    df = add_weekday_weekend(df)
+    df = add_month_seasonality(df)
+    df = add_holiday_flags(df, country="US")
+    df = add_derived(df)
+    save_df(df, RAW_DIR / "ua_data.csv")
+    return df
+
+if __name__ == "__main__":
+    generate_and_save()
