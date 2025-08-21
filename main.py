@@ -102,4 +102,30 @@ def main():
     print("Artifacts saved in data/processed")
 
 if __name__ == "__main__":
+
+    main()
+
+
+import os
+from src.data_gen import generate_and_save
+from src.utils import ensure_dirs, RAW_DIR, PROC_DIR, save_df
+import pandas as pd
+
+# Main entry point for generating data and ensuring required files exist
+def main():
+    ensure_dirs()
+
+    # Check if data files exist; if not, generate them
+    if not os.path.exists(RAW_DIR / "ua_data.csv"):
+        print("Generating data...")
+        generate_and_save()  # Generates the data and saves it as ua_data.csv
+
+    # After data generation, you may call other processes here, such as model training or further saving
+    print("Data is ready. You can now run your Streamlit app or other parts of your program.")
+    
+    # Optionally, you can save additional artifacts here
+    # For example, save any other required dataframes
+    # save_df(df, PROC_DIR / "processed_data.csv")
+
+if __name__ == "__main__":
     main()
