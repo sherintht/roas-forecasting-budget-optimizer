@@ -1,8 +1,6 @@
-import os
-import json
+from pathlib import Path
 import numpy as np
 import pandas as pd
-from pathlib import Path
 
 DATA_DIR = Path("data")
 RAW_DIR = DATA_DIR / "raw"
@@ -26,7 +24,7 @@ def set_seed(seed: int = 42):
 
 def add_weekday_weekend(df: pd.DataFrame):
     df["weekday"] = df["date"].dt.weekday
-    df["is_weekend"] = df["weekday"].isin([5,6]).astype(int)
+    df["is_weekend"] = df["weekday"].isin([5, 6]).astype(int)
     return df
 
 def add_month_seasonality(df: pd.DataFrame):
@@ -37,7 +35,8 @@ def add_holiday_flags(df: pd.DataFrame, country="US"):
     try:
         import holidays
         hol = holidays.country_holidays(country)
-        df["is_holiday"] = df["date"].dt.date.astype("datetime64").isin(hol).astype(int)
+        dates = pd.to_datetime(df["date"]).dt.date
+        df["is_holiday"] = dates.astype("datetime64").isin(hol).astype(int)
     except Exception:
         df["is_holiday"] = 0
     return df
