@@ -1,13 +1,13 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import xgboost as xgb    
+import xgboost as xgb    # hidden from UI
 import holidays
 import plotly.express as px
 
 # Page configuration
 st.set_page_config(
-    page_title="ROAS Insights for Marketers",
+    page_title="ROAS Insights Dashboard",
     page_icon="💡",
     layout="wide"
 )
@@ -27,12 +27,17 @@ with st.sidebar:
         type=["csv"],
         help="Required columns: date, campaign, channel, spend, installs, conversions, revenue, roas_day_1"
     )
+    if uploaded_file:
+        st.success("✅ File uploaded successfully!")
+
 if not uploaded_file:
     st.info("📂 Please upload your campaign CSV to begin.")
     st.stop()
 
 # Load and prepare
 df = pd.read_csv(uploaded_file)
+
+@st.cache_data
 def prepare(df):
     df = df.copy()
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
@@ -50,6 +55,7 @@ def prepare(df):
     return df
 
 df = prepare(df)
+
 required = ["date","campaign","channel","spend","installs","conversions","revenue","roas_day_1"]
 if any(c not in df.columns for c in required):
     st.error(f"Missing data columns: {[c for c in required if c not in df.columns]}")
@@ -63,6 +69,18 @@ with st.sidebar:
         ["Overview", "Predict ROAS", "Budget Simulator"]
     )
 
+# Train model once and cache
+@st.cache_resource
+def train_model(data):
+    features = ["spend","installs","conversions","CAC","Weekend","Holiday","CampCode","ChanCode","Spend/Install","ConvRate","Rev/Conv"]
+    X = data[features]
+    y = data["roas_day_1"]
+    model = xgb.XGBRegressor(objective="reg:squarederror", n_estimators=50, random_state=42)
+    model.fit(X, y)
+    return model, features
+
+model, features = train_model(df)
+
 # 1. Overview
 if view == "Overview":
     st.subheader("📊 Data Overview")
@@ -73,7 +91,7 @@ if view == "Overview":
     st.metric("Date Range", f"{span.days} days")
 
     st.markdown("**Sample Records**")
-    st.dataframe(df[required].head(8))
+    st.dataframe(df[required].head(8), use_container_width=True)
 
     st.markdown("**Key Averages**")
     st.write(f"- Average Daily Spend: ${df['spend'].mean():,.0f}")
@@ -83,19 +101,13 @@ if view == "Overview":
 # 2. Predict ROAS
 elif view == "Predict ROAS":
     st.subheader("📈 Day-1 ROAS Forecast")
-    features = ["spend","installs","conversions","CAC","Weekend","Holiday","CampCode","ChanCode","Spend/Install","ConvRate","Rev/Conv"]
-    X = df[features]
-    y = df["roas_day_1"]
+    df["ROAS_Forecast"] = model.predict(df[features])
 
-    # Train the “Predictive Engine”
-    model = xgb.XGBRegressor(objective="reg:squarederror", n_estimators=50, random_state=42)
-    model.fit(X, y)
-    df["ROAS_Forecast"] = model.predict(X)
-
-    # Optionally show model accuracy
+    # Show forecast accuracy
+    y_true = df["roas_day_1"]
     y_pred = df["ROAS_Forecast"]
-    mape = np.mean(np.abs((y - y_pred) / y)) * 100
-    rmse = np.sqrt(np.mean((y - y_pred) ** 2))
+    mape = np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+    rmse = np.sqrt(np.mean((y_true - y_pred) ** 2))
     st.markdown(f"**Forecast Accuracy:** Within {mape:.1f}% on average; RMSE={rmse:.2f}")
 
     st.markdown("**Top 5 Campaigns by Forecasted Day-1 ROAS**")
@@ -120,12 +132,14 @@ else:
             df2.loc[df2["channel"]==ch, "spend"] *= (1+pct)
         df2 = prepare(df2)
         df2["ROAS_Forecast"] = model.predict(df2[features])
+
         orig = (df["roas_day_1"]*df["spend"]).sum()/df["spend"].sum()
         new = (df2["ROAS_Forecast"]*df2["spend"]).sum()/df2["spend"].sum()
         uplift = (new-orig)/orig*100
+
         st.metric("Original ROAS", f"{orig:.2f}×")
         st.metric("New ROAS", f"{new:.2f}×", delta=f"{new-orig:.2f}×")
         st.write(f"**Total ROAS Change:** {uplift:+.1f}%")
 
 st.markdown("---")
-st.caption("© Your Company")
+st.caption("© Your Company — Professional ROAS Insights")
