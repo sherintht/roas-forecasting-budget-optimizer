@@ -4,7 +4,7 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_percentage_error, mean_squared_error
 import xgboost as xgb
-from prophet import Prophet
+from prophet import prophet
 import holidays
 import plotly.express as px
 import plotly.graph_objects as go
@@ -469,3 +469,4 @@ This **ROAS Forecasting and Optimization Pipeline** demonstrates advanced analyt
 """)
 
 st.markdown("*🚀 Deployed on Streamlit Community Cloud*")
+
