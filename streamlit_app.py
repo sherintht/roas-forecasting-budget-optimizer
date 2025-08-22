@@ -1,44 +1,70 @@
+
 import streamlit as st
 import pandas as pd
-from pathlib import Path
+import pickle
+import os
+from prophet import Prophet
 
-def run_streamlit_app():
-    st.title("ROAS Forecasting and Optimization Dashboard")
-    uploaded_file = st.file_uploader("Upload your marketing campaign dataset", type=['csv'])
-    
-    if uploaded_file:
-        data = pd.read_csv(uploaded_file)
-        data = prepare_data(data)
-        
-        st.subheader("Raw Data")
-        st.write(data.head())
-        
-        st.subheader("ROAS Prediction Metrics")
-        for target in targets:
-            st.write(f"{target} MAPE: {results[target]['MAPE']:.4f}")
-            st.write(f"{target} RMSE: {results[target]['RMSE']:.4f}")
-        
-        # Select campaign and channel for forecasting
-        campaign_sel = st.selectbox("Select Campaign for Forecast", data['campaign'].unique())
-        channel_sel = st.selectbox("Select Channel for Forecast", data['channel'].unique())
-        periods = st.slider("Select Forecast Horizon (days)", 7, 60, 30)
-        
-        if st.button("Generate Forecast"):
-            forecast = prophet_forecast(data, campaign_sel, channel_sel, periods=periods)
-            st.line_chart(forecast.set_index('ds')['yhat'])
-        
-        # Budget reallocation simulation input
-        st.subheader("Budget Reallocation Simulator")
-        channels = list(data['channel'].unique())
-        spend_shifts = {}
-        for ch in channels:
-            spend_shifts[ch] = st.number_input(f"Budget shift for channel {ch}", value=0.0)
-        
-        if st.button("Simulate Budget Reallocation"):
-            before, after, uplift = budget_reallocation_simulator(data, results, spend_shifts)
-            st.write(f"Current Portfolio ROAS: {before:.4f}")
-            st.write(f"Projected Portfolio ROAS after reallocation: {after:.4f}")
-            st.write(f"Projected ROAS Uplift: {uplift:.4f}")
+# Load models
+@st.cache_resource
+def load_models():
+    models = {}
+    model_dir = 'models'
+    for filename in os.listdir(model_dir):
+        if filename.endswith('_model.pkl'):
+            target = filename.replace('_model.pkl', '')
+            with open(os.path.join(model_dir, filename), 'rb') as f:
+                models[target] = pickle.load(f)
+    return models
 
-if __name__ == "__main__":
-    run_streamlit_app()
+models = load_models()
+
+st.title("ROAS Forecasting & Budget Optimization Dashboard")
+uploaded_file = st.file_uploader("Upload Your Campaign CSV Dataset", type=['csv'])
+
+if uploaded_file:
+    df = pd.read_csv(uploaded_file)
+    st.write("Sample Data", df.head())
+
+    # Prepare data as in training
+    def prepare_data(df):
+        df['date'] = pd.to_datetime(df['date'])
+        df['CAC'] = df.apply(lambda x: x['spend'] / x['installs'] if x['installs'] > 0 else 0, axis=1)
+        df['is_weekend'] = df['date'].dt.dayofweek >= 5
+        us_holidays = holidays.US()
+        df['is_holiday'] = df['date'].isin(us_holidays)
+        for col in ['campaign', 'channel']:
+            df[col] = df[col].astype('category').cat.codes
+        return df
+
+    import holidays
+    df = prepare_data(df)
+
+    # Show forecast options
+    campaign_options = df['campaign'].unique()
+    channel_options = df['channel'].unique()
+
+    selected_campaign = st.selectbox("Select Campaign for Forecast", campaign_options)
+    selected_channel = st.selectbox("Select Channel for Forecast", channel_options)
+    forecast_days = st.slider("Forecast Days", 7, 60, 30)
+
+    if st.button("Generate Forecast"):
+        # Create future dataframe
+        forecast_df = df[(df['campaign']==selected_campaign) & (df['channel']==selected_channel)]
+        ts_data = forecast_df.groupby('date').agg({'revenue':'sum', 'roas_day_1':'mean'}).reset_index()
+        ts_data.rename(columns={'date':'ds','revenue':'y'}, inplace=True)
+        m = Prophet(country_holidays=holidays.CountryHolidays('US'))
+        m.fit(ts_data)
+        future = m.make_future_dataframe(periods=forecast_days)
+        forecast = m.predict(future)
+        st.line_chart(forecast.set_index('ds')['yhat'])
+
+    # Example: Simulate budget change
+    st.subheader("Simulate Budget Adjustment")
+    adjust_spend = {}
+    for ch in df['channel'].unique():
+        adjust_spend[ch] = st.number_input(f"Adjust spend for channel {ch}", value=0.0)
+    if st.button("Run Reallocation Simulation"):
+        st.write("Simulation not implemented: placeholder for future enhancement.")
+
+st.write("Please upload dataset to proceed.")
