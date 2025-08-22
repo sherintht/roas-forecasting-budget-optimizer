@@ -2,93 +2,43 @@ import streamlit as st
 import pandas as pd
 from pathlib import Path
 
-PROC_DIR = Path("data/processed")
-RAW_DIR = Path("data/raw")
+def run_streamlit_app():
+    st.title("ROAS Forecasting and Optimization Dashboard")
+    uploaded_file = st.file_uploader("Upload your marketing campaign dataset", type=['csv'])
+    
+    if uploaded_file:
+        data = pd.read_csv(uploaded_file)
+        data = prepare_data(data)
+        
+        st.subheader("Raw Data")
+        st.write(data.head())
+        
+        st.subheader("ROAS Prediction Metrics")
+        for target in targets:
+            st.write(f"{target} MAPE: {results[target]['MAPE']:.4f}")
+            st.write(f"{target} RMSE: {results[target]['RMSE']:.4f}")
+        
+        # Select campaign and channel for forecasting
+        campaign_sel = st.selectbox("Select Campaign for Forecast", data['campaign'].unique())
+        channel_sel = st.selectbox("Select Channel for Forecast", data['channel'].unique())
+        periods = st.slider("Select Forecast Horizon (days)", 7, 60, 30)
+        
+        if st.button("Generate Forecast"):
+            forecast = prophet_forecast(data, campaign_sel, channel_sel, periods=periods)
+            st.line_chart(forecast.set_index('ds')['yhat'])
+        
+        # Budget reallocation simulation input
+        st.subheader("Budget Reallocation Simulator")
+        channels = list(data['channel'].unique())
+        spend_shifts = {}
+        for ch in channels:
+            spend_shifts[ch] = st.number_input(f"Budget shift for channel {ch}", value=0.0)
+        
+        if st.button("Simulate Budget Reallocation"):
+            before, after, uplift = budget_reallocation_simulator(data, results, spend_shifts)
+            st.write(f"Current Portfolio ROAS: {before:.4f}")
+            st.write(f"Projected Portfolio ROAS after reallocation: {after:.4f}")
+            st.write(f"Projected ROAS Uplift: {uplift:.4f}")
 
-st.set_page_config(page_title="ROAS Forecasting & Budget Allocation", layout="wide")
-
-@st.cache_data
-def load_data():
-    df = pd.read_csv(RAW_DIR / "ua_data.csv", parse_dates=["date"])
-    holdout = pd.read_csv(PROC_DIR / "holdout_predictions.csv", parse_dates=["date"])
-    bt = pd.read_csv(PROC_DIR / "backtest_metrics.csv", parse_dates=["train_end", "test_start", "test_end"])
-    recs = pd.read_csv(PROC_DIR / "recommendations.csv", parse_dates=["date"])
-    port_base = pd.read_csv(PROC_DIR / "portfolio_baseline.csv")
-    port_after = pd.read_csv(PROC_DIR / "portfolio_after.csv")
-    return df, holdout, bt, recs, port_base, port_after
-
-def ensure_artifacts():
-    """Generate missing data artifacts by running the training pipeline."""
-    try:
-        import main as training_pipeline
-    except Exception as e:
-        st.error(f"Could not import training pipeline: {e}")
-        st.stop()
-    try:
-        training_pipeline.main()  # writes CSVs into data/processed
-    except Exception as e:
-        st.error(f"Failed to generate artifacts by running training pipeline: {e}")
-        st.stop()
-
-# First try to load; if missing, generate and try again
-try:
-    df, holdout, bt, recs, port_base, port_after = load_data()
-except Exception:
-    with st.spinner("No artifacts found. Generating demo data and models (one-time)..."):
-        ensure_artifacts()
-    df, holdout, bt, recs, port_base, port_after = load_data()
-
-st.title("Mobile Game UA: ROAS Forecasting and Budget Allocation")
-
-# KPIs
-col1, col2, col3 = st.columns(3)
-with col1:
-    mape = bt["MAPE"].mean()
-    st.metric("Backtest MAPE (D7 ROAS)", f"{mape*100:.1f}%")
-with col2:
-    rmse = bt["RMSE"].mean()
-    st.metric("Backtest RMSE (D7 ROAS)", f"{rmse:.3f}")
-with col3:
-    wape = bt["WAPE"].mean()
-    st.metric("Backtest WAPE (D7 ROAS)", f"{wape*100:.1f}%")
-
-st.markdown("Historical & Forecasted ROAS (Holdout)")
-
-channel_filter = st.multiselect("Channels", sorted(df["channel"].unique().tolist()), default=None)
-campaign_filter = st.multiselect("Campaigns", sorted(df["campaign_id"].unique().tolist()), default=None)
-
-plot_df = holdout.copy()
-if channel_filter:
-    plot_df = plot_df[plot_df["channel"].isin(channel_filter)]
-if campaign_filter:
-    plot_df = plot_df[plot_df["campaign_id"].isin(campaign_filter)]
-
-st.line_chart(plot_df.set_index("date")[["ROAS_d7", "pred_d7", "pred_d7_p05", "pred_d7_p95"]])
-
-st.subheader("Scale/Cut Recommendations")
-st.dataframe(recs.sort_values(["decision", "pred_roas"], ascending=[True, False]))
-
-st.subheader("Budget Reallocation Simulator")
-available_channels = sorted(df["channel"].unique().tolist())
-src = st.selectbox("Move budget FROM channel", available_channels)
-dst = st.selectbox("Move budget TO channel", [c for c in available_channels if c != src])
-amount = st.number_input("Amount to reallocate ($)", min_value=100.0, value=10000.0, step=100.0)
-min_spend = st.number_input("Minimum spend per campaign ($)", min_value=0.0, value=100.0, step=50.0)
-max_shift = st.slider("Max shift ratio per campaign", min_value=0.1, max_value=0.8, value=0.3, step=0.05)
-
-if st.button("Simulate Reallocation"):
-    from src.business import budget_reallocation
-    portfolio = port_base.copy()
-    realloc_map = {f"{src}->{dst}": amount}
-    after, new_roas = budget_reallocation(
-        portfolio,
-        realloc_map,
-        min_spend_by_campaign=min_spend,
-        max_shift_ratio=max_shift
-    )
-    baseline_roas = (portfolio["current_spend"] * portfolio["pred_roas"]).sum() / portfolio["current_spend"].sum()
-    uplift = 100 * (new_roas - baseline_roas) / baseline_roas
-    st.metric("Portfolio ROAS (baseline)", f"{baseline_roas:.3f}")
-    st.metric("Portfolio ROAS (after)", f"{new_roas:.3f}")
-    st.metric("Expected uplift", f"{uplift:.2f}%")
-    st.dataframe(after.sort_values("channel"))
+if __name__ == "__main__":
+    run_streamlit_app()
