@@ -1,4 +1,3 @@
-
 # Core ML and Data Science Libraries
 pandas>=1.5.0
 numpy>=1.21.0
@@ -7,8 +6,8 @@ scikit-learn>=1.0.0
 # XGBoost for Machine Learning
 xgboost>=1.6.0
 
-# Time Series Forecasting
-prophet>=1.1.4
+# Time Series Forecasting - FIXED VERSION
+prophet==1.1.4
 
 # Holidays Library
 holidays>=0.29
@@ -16,6 +15,8 @@ holidays>=0.29
 # Streamlit (optional - already included by default)
 streamlit>=1.28.0
 
-# Additional utilities
-pickle-mixin>=1.0.2
+# Plotting libraries
 plotly>=5.0.0
+
+# Additional utilities (removed pickle-mixin as not needed)
+# pickle-mixin>=1.0.2
