@@ -4,6 +4,7 @@ import numpy as np
 import xgboost as xgb    # hidden from UI
 import holidays
 import plotly.express as px
+import plotly.graph_objects as go
 
 # Page configuration
 st.set_page_config(
@@ -15,8 +16,8 @@ st.set_page_config(
 # Title and description
 st.title("💡 ROAS Insights Dashboard")
 st.markdown(
-    "Upload your campaign data to see expected returns, "
-    "discover top-performing campaigns, and test budget changes—all in plain English."
+    "Analyze your campaign performance, forecast returns, "
+    "and simulate budget changes—all in plain English."
 )
 
 # Sidebar: Upload
@@ -25,7 +26,7 @@ with st.sidebar:
     uploaded_file = st.file_uploader(
         "Select your marketing CSV file",
         type=["csv"],
-        help="Required columns: date, campaign, channel, spend, installs, conversions, revenue, roas_day_1"
+        help="Required: date,campaign,channel,spend,installs,conversions,revenue,roas_day_1"
     )
     if uploaded_file:
         st.success("✅ File uploaded successfully!")
@@ -41,9 +42,7 @@ df = pd.read_csv(uploaded_file)
 def prepare(df):
     df = df.copy()
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    # Drop rows missing essential data
     df.dropna(subset=["date","spend","installs","conversions","revenue","roas_day_1"], inplace=True)
-    # Feature engineering
     df["CAC"] = df["spend"] / df["installs"].replace(0, np.nan)
     df["CAC"].fillna(0, inplace=True)
     df["Weekend"] = df["date"].dt.weekday >= 5
@@ -70,7 +69,7 @@ with st.sidebar:
     st.header("2. View Options")
     view = st.selectbox(
         "Select view:",
-        ["Overview", "Predict ROAS", "Budget Simulator"]
+        ["Overview", "Predict ROAS", "Time Forecast", "Budget Simulator"]
     )
 
 # Cache model training
@@ -116,7 +115,6 @@ elif view == "Predict ROAS":
     y_pred = df["ROAS_Forecast"]
     mape = np.mean(np.abs((y_true - y_pred) / y_true)) * 100
     rmse = np.sqrt(np.mean((y_true - y_pred) ** 2))
-
     st.markdown(f"**Forecast Accuracy:** Within {mape:.1f}% on average; RMSE = {rmse:.2f}")
 
     st.markdown("**Top 5 Campaigns by Forecasted Day-1 ROAS**")
@@ -127,7 +125,36 @@ elif view == "Predict ROAS":
     )
     st.plotly_chart(fig, use_container_width=True)
 
-# 3. Budget Simulator
+# 3. Time Forecast
+elif view == "Time Forecast":
+    st.subheader("🔮 30-Day Revenue Forecast (Moving Average)")
+    camp = st.selectbox("Select Campaign", df["campaign"].unique())
+    chan = st.selectbox("Select Channel", df["channel"].unique())
+    
+    subset = df[(df["campaign"]==camp) & (df["channel"]==chan)][["date","revenue"]].sort_values("date")
+    if subset.empty:
+        st.warning("No data for that combination.")
+    else:
+        subset = subset.set_index("date").resample("D").sum().fillna(0)
+        subset["7d_MA"] = subset["revenue"].rolling(7, min_periods=1).mean()
+        
+        last_date = subset.index.max()
+        future_dates = pd.date_range(last_date + pd.Timedelta(days=1), periods=30)
+        forecast = pd.DataFrame(index=future_dates)
+        forecast["revenue"] = np.nan
+        forecast["MA_Forecast"] = subset["7d_MA"].iloc[-7:].mean()  # constant forecast
+        
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=subset.index, y=subset["revenue"],
+                                 mode="lines", name="Historical Revenue"))
+        fig.add_trace(go.Scatter(x=forecast.index, y=forecast["MA_Forecast"],
+                                 mode="lines", name="Forecasted Revenue"))
+        fig.update_layout(xaxis_title="Date", yaxis_title="Revenue ($)")
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.markdown(f"**Projected 30-day Revenue:** ${forecast['MA_Forecast'].sum():,.0f}")
+
+# 4. Budget Simulator
 else:
     st.subheader("💰 Budget Reallocation Simulator")
     st.markdown("Adjust each channel’s spend to see potential ROAS change.")
